@@ -1,0 +1,80 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Resources:
+  
+  # Crear una tabla DynamoDB
+  InventaryDataTable:
+    Type: 'AWS::DynamoDB::Table'
+    Properties:
+      TableName: 'Inventary_data'
+      AttributeDefinitions:
+        - AttributeName: 'producto'
+          AttributeType: 'S'
+      KeySchema:
+        - AttributeName: 'producto'
+          KeyType: 'HASH'  # Clave primaria
+      ProvisionedThroughput:
+        ReadCapacityUnits: 5
+        WriteCapacityUnits: 5
+
+  # Crear un Stream de Kinesis
+  InventoryStream:
+    Type: 'AWS::Kinesis::Stream'
+    Properties:
+      Name: 'inventory-stream'
+      ShardCount: 1
+
+  # Crear la función Lambda
+  LambdaFunction:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      FunctionName: 'ProcessKinesisInventoryStream'
+      Handler: 'lambda_function.lambda_handler'
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Runtime: 'python3.8'
+      Code:
+        S3Bucket: '<YOUR_S3_BUCKET>'  # Aquí debes poner el nombre del bucket S3 donde tienes el código de Lambda (archivo zip)
+        S3Key: '<YOUR_LAMBDA_CODE_KEY>'  # Aquí debes poner la ruta del archivo zip en S3 que contiene el código de Lambda
+      MemorySize: 128
+      Timeout: 60
+      Environment:
+        Variables:
+          DYNAMODB_TABLE_NAME: !Ref InventaryDataTable  # La tabla DynamoDB creada
+
+  # Crear el rol de ejecución de la función Lambda con permisos para DynamoDB y Kinesis
+  LambdaExecutionRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Action: 'sts:AssumeRole'
+            Effect: 'Allow'
+            Principal:
+              Service: 'lambda.amazonaws.com'
+      Policies:
+        - PolicyName: 'LambdaKinesisDynamoDBPolicy'
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Action:
+                  - 'dynamodb:PutItem'
+                  - 'dynamodb:BatchWriteItem'
+                Effect: 'Allow'
+                Resource: !GetAtt InventaryDataTable.Arn
+              - Action:
+                  - 'kinesis:DescribeStream'
+                  - 'kinesis:GetRecords'
+                  - 'kinesis:GetShardIterator'
+                  - 'kinesis:ListStreams'
+                  - 'kinesis:PutRecord'
+                Effect: 'Allow'
+                Resource: !GetAtt InventoryStream.Arn
+
+  # Crear la configuración de trigger (EventSourceMapping) para conectar Lambda con Kinesis
+  KinesisEventSourceMapping:
+    Type: 'AWS::Lambda::EventSourceMapping'
+    Properties:
+      BatchSize: 5
+      EventSourceArn: !GetAtt InventoryStream.Arn
+      FunctionName: !Ref LambdaFunction
+      Enabled: 'True'
